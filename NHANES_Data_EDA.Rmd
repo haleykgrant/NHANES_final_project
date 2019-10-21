@@ -370,6 +370,7 @@ bind_rows(
 
 
 ```{r}
+# average wear vs non-wear value among heavy-, moderate- and non-drinkers in first 3 hours
 hd = Flags %>%
   filter(SEQN %in% hv.drnk)%>%
   select(starts_with("MIN")[1:180]) %>%
@@ -385,6 +386,7 @@ md = Flags %>%
   select(starts_with("MIN")[1:180])%>%
   colMeans(na.rm = T)
 
+#test if group averages are different (each data point is an average per that minute)
 
 wilcox.test(hd,md, conf.int = T)
 wilcox.test(hd,nd, conf.int = T)
@@ -417,6 +419,7 @@ wilcox.test(md_a,nd_a, conf.int = T)
 
 
 ```{r}
+# make data sets including demographic information
 PAX_full = left_join(PAX_clean,demog, by = c("SEQN" , "SDDSRVYR"))
 Flags_full = left_join(Flags,demog, by = c("SEQN" , "SDDSRVYR"))
 
