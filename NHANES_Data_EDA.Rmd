@@ -426,11 +426,15 @@ Flags_full = left_join(Flags,demog, by = c("SEQN" , "SDDSRVYR"))
 
 
 
+
 ```{r eval = FALSE}
+
+# make long data set with just first two hours of day included
 Flags_long = Flags_full%>%
   select(c("SEQN", "WEEKDAY", starts_with("MIN")[1:120]))%>%
   gather(key = "minute", value = "wear", starts_with("MIN"))
 
+# get rid of "MIN" in minute values
 Flags_long$minute = as.numeric(substr(Flags_long$minute,4,nchar(Flags_long$minute)))
 
 Flags_long$minute = Flags_long$minute+(1440*(Flags_long$WEEKDAY-1))
@@ -439,6 +443,8 @@ Flags_long = left_join(Flags_long, demog[,c("SEQN","DrinkStatus")])
 
 Flags_long = Flags_long %>%
   filter(!is.na(DrinkStatus))
+
+# make column converting minute from midnight to time of day
 Flags_long$time = format(as.POSIXct((Flags_long$minute)*60, origin = "1970-01-01", tz = "UTC"), "%H:%M")
 
 library(caret)
@@ -446,15 +452,17 @@ library(lme4)
 library(fda)
 set.seed(123)
 
+# get list of unique ids in random order
 ids = unique(Flags_long$SEQN)%>%
   sample(size = length(unique(Flags_long$SEQN)),replace = FALSE)
 
+# set up cross validatiion folds
 folds <- cut(seq(1,length(ids)),breaks=5,labels=FALSE)
 
 library(refund)
 #Perform 10 fold cross validation
 for(i in 1:5){
-    #Segement your data by fold using the which() function 
+   
     testIDs = ids[folds==i]
     
     testData <- Flags_long%>%
