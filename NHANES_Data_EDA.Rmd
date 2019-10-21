@@ -1,0 +1,474 @@
+---
+title: "NHANES Data EDA"
+author: "Trang Nguyen and Haley Grant"
+date: "10/8/2019"
+output: 
+  html_document:
+    code_folding: "hide"
+    toc: TRUE
+    toc_float: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message = FALSE}
+library(rnhanesdata)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(magrittr)
+
+load("PAXINTEN_C.rda")
+load("PAXINTEN_D.rda")
+load("Covariate_C.rda")
+load("Covariate_D.rda")
+load("FLAGS_C.rda")
+load("FLAGS_D.rda")
+
+```
+
+### Data Reliability 
+
+PAXCAL and PAXSTAT are columns that show data reliability for each row. PAXCAL denotes the calibration of the device (1 if calibrated, 2 if not, and 9 if unknown). PAXSTAT denotes the data reliability status (1 if reliable, 2 if not).
+
+```{r summary stats and basics}
+#colnames(PAXINTEN_C)
+
+# View number of inadequate rows
+ggc1 = ggplot(data = PAXINTEN_C, aes(x = PAXCAL))+geom_bar(aes(fill = PAXCAL==1),position = position_dodge(width = 0.8), width=0.5)+
+  labs(title = "PAXCAL: 2003-2004")+
+  scale_fill_discrete(name = NULL,labels = c("Unreliable Data","Reliable Data"))+
+  theme_bw()
+ggc2 = ggplot(data = PAXINTEN_C, aes(x = PAXSTAT))+geom_bar(aes(fill = PAXSTAT==1),position = position_dodge(width = 0.8), width=0.5)+
+  labs(title = "PAXSTAT: 2003-2004")+
+  scale_fill_discrete(name = NULL,labels = c("Unreliable Data","Reliable Data"))+
+  theme_bw()
+ggd1 = ggplot(data = PAXINTEN_D, aes(x = PAXCAL))+geom_bar(aes(fill = PAXCAL==1),position = position_dodge(width = 0.8), width=0.5)+
+  labs(title = "PAXCAL: 2005-2006")+
+  scale_fill_discrete(name = NULL,labels = c("Unreliable Data","Reliable Data"))+
+  theme_bw()
+ggd2 = ggplot(data = PAXINTEN_D, aes(x = PAXSTAT))+geom_bar(aes(fill = PAXSTAT==1),position = position_dodge(width = 0.8), width=0.5)+
+  labs(title = "PAXSTAT: 2005-2006")+
+  scale_fill_discrete(name = NULL, labels = c("Unreliable Data","Reliable Data"))+
+  theme_bw()
+
+ggarrange(ggc1,ggd1,ggc2,ggd2 ,ncol = 2, nrow = 2, common.legend = T, legend = "bottom")
+
+
+
+```
+
+### Average activity counts over time
+
+```{r average_plot}
+PAXINTEN     <- bind_rows(PAXINTEN_C, PAXINTEN_D)
+PAXINTEN_log <- bind_cols(PAXINTEN[, 1:5], log(PAXINTEN[, -c(1:5)] + 1))
+Flags        <- bind_rows(Flags_C, Flags_D)
+
+mean_column <- function(col_name, data) {
+    sapply(1:7, function(i) {
+        tmp <- data %>%
+            filter(WEEKDAY == i) %>%
+            select(starts_with("MIN"))
+        colMeans(tmp, na.rm = TRUE)
+    }) %>%
+        set_colnames(c("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")) %>%
+        as_tibble() %>%
+        mutate(minute = 1:n()) %>%
+        gather(key = "day", value = "value", -minute)
+}
+
+bind_rows(
+    mean_column(col_name = "count", data = PAXINTEN)     %>% mutate(key = "count"),
+    mean_column(col_name = "log"  , data = PAXINTEN_log) %>% mutate(key = "log"),
+    mean_column(col_name = "flag" , data = Flags)        %>% mutate(key = "flag")
+) %>%
+    mutate(key = factor(key,
+                        levels = c("count", "log", "flag"),
+                        labels = c("average count",
+                                   "average log count",
+                                   "fraction wearing device"))) %>%
+    ggplot(aes(x = minute, y = value, colour = day)) +
+    geom_line() +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw()
+
+```
+
+### Removing non-wear timepoints 
+```{r cleaned_average_plot}
+PAX       <- bind_rows(PAXINTEN_C, PAXINTEN_D) %>% filter(PAXCAL==1 & PAXSTAT==1)
+Flags_mat <- bind_rows(Flags_C, Flags_D) %>% filter(PAXCAL==1 & PAXSTAT==1)
+PAX_front <- PAX[, 1:5]
+PAX_back  <- PAX[, -c(1:5)]
+rm(PAX)
+
+Flags_mat <- Flags_mat[, -c(1:5)]
+PAX_back[Flags_mat==0] <- NA
+rm(Flags_mat)
+
+PAX_clean <- bind_cols(PAX_front, PAX_back)
+rm(PAX_front, PAX_back)
+
+PAX_clean_log <- bind_cols(PAX_clean[, 1:5], log(PAX_clean[, -c(1:5)] + 1))
+
+
+bind_rows(
+    mean_column(col_name = "count", data = PAX_clean)     %>% mutate(key = "count"),
+    mean_column(col_name = "log"  , data = PAX_clean_log) %>% mutate(key = "log count")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    geom_line() +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value")
+```
+
+
+```{r plot_individuals, fig.width=10, fig.height=5}
+sum(PAXINTEN_C$PAXCAL != Flags_C$PAXCAL)
+sum(PAXINTEN_C$PAXSTAT != Flags_C$PAXSTAT)
+
+wear <- bind_rows(Flags_C, Flags_D) %>%
+    filter(PAXCAL==1 & PAXSTAT==1) %>%
+    select(-c(PAXCAL, PAXSTAT)) %>%
+    mutate(WEEKDAY = factor(WEEKDAY,
+                            levels = c(2:7, 1),
+                            labels = c("Mon", "Tue", "Wed", "Thu", "Fri",
+                                       "Sat", "Sun")))
+count <- bind_rows(PAXINTEN_C, PAXINTEN_D) %>%
+    filter(PAXCAL==1 & PAXSTAT==1) %>%
+    select(-c(PAXCAL, PAXSTAT)) %>%
+    mutate(WEEKDAY = factor(WEEKDAY,
+                            levels = c(2:7, 1),
+                            labels = c("Mon", "Tue", "Wed", "Thu", "Fri",
+                                       "Sat", "Sun")))
+
+px_wear <- function(w = wear, id) {
+    w %>% 
+        filter(SEQN==id) %>%
+        gather(key = minute, value = wear, -c(SEQN, WEEKDAY, SDDSRVYR)) %>%
+        mutate(minute = substr(minute, 4, nchar(minute)),
+               minute = as.integer(minute))
+}
+
+px_count <- function(c = count, id) {
+    c %>% 
+        filter(SEQN==id) %>%
+        gather(key = minute, value = count, -c(SEQN, WEEKDAY, SDDSRVYR)) %>%
+        mutate(minute = substr(minute, 4, nchar(minute)),
+               minute = as.integer(minute)) %>%
+        group_by(WEEKDAY) %>%
+        mutate(maxdaycount = max(count)) %>%
+        ungroup()
+}
+
+plot_day <- function(w = wear,
+                     c = count,
+                     id = NULL,
+                     seed = NULL) {
+    
+    if (is.null(id)) {
+        ids <- unique(w$SEQN)
+        if (is.null(seed)) { seed <- sample(.Machine$integer.max, 1) }
+        set.seed(seed)
+        id <- sample(ids, 1)
+    }
+    
+    wear <- px_wear(w = w, id = id)
+    count <- px_count(c = c, id = id)
+    
+    wear %>%
+        ggplot(aes(x = minute*24/1440, y = wear)) +
+        geom_area(fill = "red", alpha = .7) +
+        geom_line() +
+        facet_grid(WEEKDAY ~ .) +
+        scale_x_continuous(breaks = seq(0, 24, 3)) +
+        labs(x = "time (hour)", 
+             y = "wear (black/red), normed count (blue)",
+             title = paste0("SEQN = ", id, ", seed =", seed)) +
+        theme_bw() +
+        geom_line(data = count, 
+                  aes(x = minute*24/1440, y = count/maxdaycount),
+                  color = "blue")
+}
+
+plot_hour <- function(w = wear, 
+                      c = count, 
+                      id, 
+                      h) {
+    
+    wear <- px_wear(w = w, id = id)
+    count <- px_count(c = c, id = id) %>% 
+        select(-maxdaycount) %>%
+        left_join(wear %>% select(WEEKDAY, SDDSRVYR, minute, wear),
+                  by = c("WEEKDAY", "SDDSRVYR", "minute")) %>%
+        mutate(count = ifelse(wear==1, count, NA)) %>%
+        select(-wear) %>%
+        filter(floor(minute*24/1440) == h) %>%
+        mutate(minute = 1 + minute - min(minute))
+    
+    p1 <- count %>%
+        ggplot(aes(x = minute, y = count)) +
+        geom_point(color = "blue") +
+        geom_line() +
+        facet_grid(WEEKDAY ~ .) +
+        labs(x = "time (minute)",
+             y = "count",
+             title = paste0("SEQN = ", id, ", hour = ", h, ", scale = raw")) +
+        theme_bw()
+    
+    p2 <- count %>%
+        ggplot(aes(x = minute, y = log(count + 1))) +
+        geom_point(color = "blue") +
+        geom_line() +
+        facet_grid(WEEKDAY ~ .) +
+        labs(x = "time (minute)",
+             y = "log count",
+             title = paste0("SEQN = ", id, ", hour = ", h, ", scale = log")) +
+        theme_bw()
+    
+    gridExtra::grid.arrange(p1, p2, ncol = 2)
+    
+}
+
+
+gridExtra::grid.arrange(
+    plot_day(seed = 15810745),
+    plot_hour(id = 40699, h = 12),
+    ncol = 2
+)
+
+
+```
+
+
+### Drinking Status
+```{r}
+demog = bind_rows(Covariate_C,Covariate_D)%>% filter()
+
+pat.id.del = unique(c(PAXINTEN_C$SEQN[PAXINTEN_C$PAXCAL!=1], PAXINTEN_C$SEQN[PAXINTEN_C$PAXSTAT!=1], PAXINTEN_D$SEQN[PAXINTEN_C$PAXCAL!=1],PAXINTEN_D$SEQN[PAXINTEN_C$PAXSTAT!=1]))
+
+demog = filter(demog, !(SEQN %in% pat.id.del))
+
+hv.drnk = demog$SEQN[which(demog$DrinkStatus=="Heavy Drinker")]
+mod.drnk = demog$SEQN[which(demog$DrinkStatus=="Moderate Drinker")]
+non.drnk = demog$SEQN[which(demog$DrinkStatus=="Non-Drinker")]
+
+children = demog$SEQN[which(demog$RIDAGEYR<18)]
+adult = demog$SEQN[which(demog$RIDAGEYR %in% c(18:65))]
+retired = demog$SEQN[which(demog$RIDAGEYR>65)]
+
+bind_rows(
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% non.drnk))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% mod.drnk))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% hv.drnk))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value")
+
+
+```
+
+
+
+```{r warning=FALSE}
+demog%>% filter(DrinkStatus == "Non-Drinker") %>%
+  ggplot(aes(x = RIDAGEYR, stat(density)))+geom_histogram(bins = 25, color = "black", fill = "lightgrey")+
+  geom_density()+
+  labs(title = "Non-drinker Ages")
+
+summary(demog%>% filter(DrinkStatus == "Non-Drinker") %>%
+  select(RIDAGEYR))
+
+demog%>% filter(DrinkStatus == "Heavy Drinker") %>%
+  select(RIDAGEYR)%>%
+  ggplot(aes(x = RIDAGEYR, stat(density)))+geom_histogram(bins = 25, color = "black", fill = "lightgrey")+
+  geom_density()+
+  labs(title = "Heavy drinker Ages")
+
+summary(demog%>% filter(DrinkStatus == "Heavy Drinker") %>%
+  select(RIDAGEYR))
+
+demog%>% filter(DrinkStatus == "Moderate Drinker") %>%
+  select(RIDAGEYR)%>%
+  ggplot(aes(x = RIDAGEYR, stat(density)))+geom_histogram(bins = 25, color = "black", fill = "lightgrey")+
+  geom_density()+
+  labs(title = "Moderate drinker Ages")
+
+summary(demog%>% filter(DrinkStatus == "Moderate Drinker") %>%
+  select(RIDAGEYR))
+
+
+```
+```{r warning=FALSE}
+bind_rows(
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(non.drnk, adult) ))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value", title = "Activity by Drinking Status in Adults Age 18-65")
+
+```
+
+
+
+
+```{r}
+bind_rows(
+    mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(non.drnk, adult) ))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value", title = "Non-wear by Drinking Status in Adults Age 18-65")
+
+
+
+bind_rows(
+    mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(non.drnk, adult) ))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    xlim(0,120)+
+    ylim(0,0.3)+
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value", title = "Non-wear by Drinking Status in Adults Age 18-65")
+
+
+bind_rows(
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(non.drnk, adult) ))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    xlim(0,120)+
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value", title = "Non-wear by Drinking Status in Adults Age 18-65")
+
+
+```
+
+
+```{r}
+hd = Flags %>%
+  filter(SEQN %in% hv.drnk)%>%
+  select(starts_with("MIN")[1:180]) %>%
+  colMeans(na.rm = T)
+
+nd = Flags %>%
+  filter(SEQN %in% non.drnk)%>%
+  select(starts_with("MIN")[1:180])%>%
+  colMeans(na.rm = T)
+  
+md = Flags %>%
+  filter(SEQN %in% mod.drnk)%>%
+  select(starts_with("MIN")[1:180])%>%
+  colMeans(na.rm = T)
+
+
+wilcox.test(hd,md, conf.int = T)
+wilcox.test(hd,nd, conf.int = T)
+wilcox.test(md,nd, conf.int = T)
+
+
+## same for activity count
+
+hd_a = PAX_clean %>%
+  filter(SEQN %in% hv.drnk)%>%
+  select(starts_with("MIN")[1:180]) %>%
+  colMeans(na.rm = T)
+
+nd_a = PAX_clean %>%
+  filter(SEQN %in% non.drnk)%>%
+  select(starts_with("MIN")[1:180])%>%
+  colMeans(na.rm = T)
+  
+md_a = PAX_clean %>%
+  filter(SEQN %in% mod.drnk)%>%
+  select(starts_with("MIN")[1:180])%>%
+  colMeans(na.rm = T)
+
+
+wilcox.test(hd_a,md_a, conf.int = T)
+wilcox.test(hd_a,nd_a, conf.int = T)
+wilcox.test(md_a,nd_a, conf.int = T)
+
+```
+
+
+```{r}
+PAX_full = left_join(PAX_clean,demog, by = c("SEQN" , "SDDSRVYR"))
+Flags_full = left_join(Flags,demog, by = c("SEQN" , "SDDSRVYR"))
+
+
+
+```
+
+
+
+```{r eval = FALSE}
+Flags_long = Flags_full%>%
+  select(c("SEQN", "WEEKDAY", starts_with("MIN")[1:120]))%>%
+  gather(key = "minute", value = "wear", starts_with("MIN"))
+
+Flags_long$minute = as.numeric(substr(Flags_long$minute,4,nchar(Flags_long$minute)))
+
+Flags_long$minute = Flags_long$minute+(1440*(Flags_long$WEEKDAY-1))
+
+Flags_long = left_join(Flags_long, demog[,c("SEQN","DrinkStatus")])
+
+Flags_long = Flags_long %>%
+  filter(!is.na(DrinkStatus))
+Flags_long$time = format(as.POSIXct((Flags_long$minute)*60, origin = "1970-01-01", tz = "UTC"), "%H:%M")
+
+library(caret)
+library(lme4)
+library(fda)
+set.seed(123)
+
+ids = unique(Flags_long$SEQN)%>%
+  sample(size = length(unique(Flags_long$SEQN)),replace = FALSE)
+
+folds <- cut(seq(1,length(ids)),breaks=5,labels=FALSE)
+
+library(refund)
+#Perform 10 fold cross validation
+for(i in 1:5){
+    #Segement your data by fold using the which() function 
+    testIDs = ids[folds==i]
+    
+    testData <- Flags_long%>%
+      filter(SEQN %in% testIDs)
+    trainData <- Flags_long %>%
+      filter(!(SEQN %in% testIDs))
+    
+   # FIT A MODEL HERE
+    
+}
+
+
+```
+
+
+
+
